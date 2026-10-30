@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, BarChart3, Boxes, Check, ChevronRight, LayoutDashboard, LogOut, Plus, RefreshCw, Save, Settings2, ShoppingBag, Users } from 'lucide-react';
 import { supabase } from '../lib/supabase.js';
 import { dateKeyPH, exportCSV, formatPHP } from '../lib/document-utils.js';
+import { buildTableOrderingUrl, formatTableLabel } from '../lib/order-utils.js';
 import StaffOrderOperations, { useStaffOrders } from './StaffOrderOperations.jsx';
 
 const asArray = (data) => Array.isArray(data) ? data : [];
@@ -220,9 +221,14 @@ function DiningTablesModule({ data, run }) {
   const [active, setActive] = useState(true);
   const [busy, setBusy] = useState(false);
   const [qrError, setQrError] = useState('');
+  const [qrNotice, setQrNotice] = useState('');
+  const [qrImages, setQrImages] = useState({});
+  const [printTableIds, setPrintTableIds] = useState(null);
   const tables = asArray(data);
   const configuredSite = import.meta.env.VITE_PUBLIC_SITE_URL?.trim();
+  const configuredMenuPath = import.meta.env.VITE_PUBLIC_MENU_PATH?.trim() || '/';
   let baseUrl = '';
+  let menuPath = '/';
   let siteError = '';
   try {
     const candidate = configuredSite || (!import.meta.env.PROD ? window.location.origin : '');
@@ -232,19 +238,32 @@ function DiningTablesModule({ data, run }) {
     if (import.meta.env.PROD && (parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost') || parsed.hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(parsed.hostname))) {
       throw new Error('Production QR codes cannot point to localhost. Set VITE_PUBLIC_SITE_URL to your public HTTPS website.');
     }
-    parsed.search = '';
-    parsed.hash = '';
-    baseUrl = parsed.toString();
+    baseUrl = parsed.origin;
+    const route = new URL(configuredMenuPath, `${baseUrl}/`);
+    menuPath = route.pathname || '/';
   } catch (error) {
     siteError = error.message;
   }
   const orderUrl = (table) => {
     if (!baseUrl) return '';
-    const url = new URL(baseUrl);
-    url.searchParams.set('table', table.public_token);
-    return url.toString();
+    return buildTableOrderingUrl(baseUrl, menuPath, table.public_token);
   };
-  const qrUrl = (table) => `https://api.qrserver.com/v1/create-qr-code/?size=240x240&format=svg&data=${encodeURIComponent(orderUrl(table))}`;
+  useEffect(() => {
+    let active = true;
+    if (!baseUrl) {
+      setQrImages({});
+      return () => { active = false; };
+    }
+    import('qrcode').then(({ default: QRCode }) => Promise.all(tables.map(async (table) => [
+      String(table.table_id),
+      await QRCode.toDataURL(orderUrl(table), { width: 320, margin: 1, errorCorrectionLevel: 'H' }),
+    ]))).then((entries) => {
+      if (active) setQrImages(Object.fromEntries(entries));
+    }).catch((error) => {
+      if (active) setQrError(`QR images could not be generated: ${error.message || 'try again.'}`);
+    });
+    return () => { active = false; };
+  }, [data, baseUrl, menuPath]);
   const reset = () => { setTableId(null); setTableNumber(''); setActive(true); };
   const save = async (event) => {
     event.preventDefault(); setBusy(true);
@@ -252,41 +271,70 @@ function DiningTablesModule({ data, run }) {
     if (result) reset();
     setBusy(false);
   };
-  const download = async (table) => {
+  const copyLink = async (table) => {
     setQrError('');
+    setQrNotice('');
     try {
-      const response = await fetch(qrUrl(table));
-      if (!response.ok) throw new Error(`QR image service returned ${response.status}.`);
-      const blob = await response.blob();
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `esmiringkape-table-${table.table_number}.svg`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      const link = orderUrl(table);
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(link);
+          copied = true;
+        } catch { /* Use the browser fallback below when clipboard permission is denied. */ }
+      }
+      if (!copied) {
+        const input = document.createElement('textarea');
+        input.value = link;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        const fallbackCopied = document.execCommand('copy');
+        input.remove();
+        if (!fallbackCopied) throw new Error('Clipboard access is unavailable in this browser.');
+      }
+      setQrNotice(`${formatTableLabel(table.table_number)} link copied.`);
     } catch (error) {
-      setQrError(`${error.message} You can still open the QR preview in a new tab and save it from there.`);
+      setQrError(error.message || 'The table link could not be copied.');
     }
   };
-  const printSheet = async () => {
+  const download = (table) => {
     setQrError('');
+    const image = qrImages[String(table.table_id)];
+    if (!image) return;
+    const link = document.createElement('a');
+    link.href = image;
+    link.download = `esmiringkape-${String(table.table_number).trim().replace(/[^\w-]+/g, '-')}.png`;
+    link.click();
+  };
+  const printSheet = async (ids = tables.filter((table) => table.is_active).map((table) => String(table.table_id))) => {
+    setQrError('');
+    setPrintTableIds(ids);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     const images = [...document.querySelectorAll('.qr-print-sheet img')];
     try {
       await Promise.all(images.map((image) => image.decode()));
-      if (images.some((image) => !image.naturalWidth)) throw new Error('A QR image could not be loaded. Retry once the QR preview is available.');
+      if (!images.length || images.some((image) => !image.naturalWidth)) throw new Error('A QR image could not be loaded. Retry once the QR preview is available.');
     } catch (error) {
+      setPrintTableIds(null);
       setQrError(error.message || 'The QR sheet could not be prepared.');
       return;
     }
     document.body.dataset.printType = 'qr-sheet';
-    window.addEventListener('afterprint', () => delete document.body.dataset.printType, { once: true });
+    window.addEventListener('afterprint', () => {
+      delete document.body.dataset.printType;
+      setPrintTableIds(null);
+    }, { once: true });
     window.print();
   };
   return <div className="admin-module-grid">
     <section className="admin-panel"><h2>{tableId ? 'Rename or update table' : 'Add dining table'}</h2><p className="muted">Table links stay stable when a table is renamed. Deactivated table links stop accepting orders.</p><form className="admin-form-grid" onSubmit={save}><label>Table name or number<input value={tableNumber} onChange={(event) => setTableNumber(event.target.value)} placeholder="1" required /></label><label className="admin-check"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> Active for ordering</label><button className="button button-primary compact-action" disabled={busy}><Save size={15} /> {busy ? 'Saving…' : 'Save table'}</button>{tableId && <button type="button" className="button button-secondary compact-action" onClick={reset}>Cancel edit</button>}</form></section>
-    <section className="admin-panel"><h2>QR address</h2><p className={siteError ? 'form-error' : 'muted'}>{siteError || `QR links use ${baseUrl}`}</p><p className="muted">Development tip: use VITE_PUBLIC_SITE_URL with your computer's LAN address when testing from a phone. Production requires HTTPS.</p><button className="button button-primary compact-action" disabled={!baseUrl || !tables.some((table) => table.is_active)} onClick={printSheet}>Print active table QR sheet</button></section>
+    <section className="admin-panel"><h2>QR address</h2><p className={siteError ? 'form-error' : 'muted'}>{siteError || `QR links use ${baseUrl}${menuPath}`}</p><p className="muted">Development tip: use VITE_PUBLIC_SITE_URL with your computer’s LAN address when testing from a phone. Production requires HTTPS. QR images are generated in this browser.</p><button className="button button-primary compact-action" disabled={!baseUrl || !tables.some((table) => table.is_active) || tables.some((table) => table.is_active && !qrImages[String(table.table_id)])} onClick={() => printSheet()}>Print active table QR sheet</button></section>
     {qrError && <p className="form-error admin-panel-wide" role="alert">{qrError}</p>}
-    <section className="admin-panel admin-panel-wide"><h2>Dining tables</h2><div className="admin-table-wrap"><table><thead><tr><th>Table</th><th>Status</th><th>Public ordering link</th><th>Actions</th></tr></thead><tbody>{tables.map((table) => <tr key={table.table_id}><td><strong>Table {table.table_number}</strong></td><td>{table.is_active ? 'Active' : 'Inactive'}</td><td>{baseUrl ? <a href={orderUrl(table)} target="_blank" rel="noreferrer">{orderUrl(table)}</a> : 'Set a public website URL'}</td><td><div className="admin-row-actions"><button className="text-button" onClick={() => { setTableId(table.table_id); setTableNumber(table.table_number); setActive(table.is_active); }}>Rename</button><button className="text-button" disabled={!baseUrl || !table.is_active} onClick={() => download(table)}>Download QR</button><button className="text-button" disabled={busy} onClick={() => { setBusy(true); run(supabase.rpc('esmiringkape_admin_save_dining_table', { p_table_id: table.table_id, p_table_number: table.table_number, p_active: !table.is_active }), table.is_active ? 'Table deactivated.' : 'Table activated.').finally(() => setBusy(false)); }}>{table.is_active ? 'Deactivate' : 'Activate'}</button></div></td></tr>)}</tbody></table></div></section>
-    <div className="qr-print-sheet" aria-hidden="true"><h1>Esmiringkape · Scan to order</h1><div className="qr-print-grid">{tables.filter((table) => table.is_active).map((table) => <article key={table.table_id}><img src={qrUrl(table)} alt="" /><h2>Table {table.table_number}</h2><p>Scan to order</p></article>)}</div></div>
+    {qrNotice && <p className="success-note admin-panel-wide" role="status"><Check size={15} />{qrNotice}</p>}
+    <section className="admin-panel admin-panel-wide"><h2>Dining tables</h2><div className="admin-table-wrap"><table><thead><tr><th>QR preview</th><th>Table</th><th>Status</th><th>Public ordering link</th><th>Actions</th></tr></thead><tbody>{tables.map((table) => <tr key={table.table_id}><td>{qrImages[String(table.table_id)] ? <img className="admin-table-qr-preview" src={qrImages[String(table.table_id)]} alt={`QR code for ${formatTableLabel(table.table_number)}`} /> : <span className="muted">Generating…</span>}</td><td><strong>{formatTableLabel(table.table_number)}</strong></td><td>{table.is_active ? 'Active' : 'Inactive'}</td><td>{baseUrl ? <a href={orderUrl(table)} target="_blank" rel="noreferrer">{orderUrl(table)}</a> : 'Set a public website URL'}</td><td><div className="admin-row-actions"><button className="text-button" onClick={() => { setTableId(table.table_id); setTableNumber(table.table_number); setActive(table.is_active); }}>Rename</button><button className="text-button" disabled={!baseUrl || !qrImages[String(table.table_id)]} onClick={() => copyLink(table)}>Copy Link</button><button className="text-button" disabled={!baseUrl || !qrImages[String(table.table_id)]} onClick={() => download(table)}>Download PNG</button><button className="text-button" disabled={!baseUrl || !qrImages[String(table.table_id)]} onClick={() => printSheet([String(table.table_id)])}>Print</button><button className="text-button" disabled={busy} onClick={() => { setBusy(true); run(supabase.rpc('esmiringkape_admin_save_dining_table', { p_table_id: table.table_id, p_table_number: table.table_number, p_active: !table.is_active }), table.is_active ? 'Table deactivated.' : 'Table activated.').finally(() => setBusy(false)); }}>{table.is_active ? 'Deactivate' : 'Activate'}</button></div></td></tr>)}</tbody></table></div></section>
+    <div className="qr-print-sheet" aria-hidden="true"><h1>Esmiringkape · Scan to order</h1><div className="qr-print-grid">{tables.filter((table) => (!printTableIds ? table.is_active : printTableIds.includes(String(table.table_id)))).map((table) => <article key={table.table_id}><img src={qrImages[String(table.table_id)] || ''} alt="" /><h2>{formatTableLabel(table.table_number)}</h2><p>Scan to order</p></article>)}</div></div>
   </div>;
 }
 

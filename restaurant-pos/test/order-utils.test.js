@@ -15,9 +15,13 @@ import {
   prepareCounterSaleRequest,
   prepareGuestOrderRequest,
   orderLineKey,
+  formatTableLabel,
+  buildTableOrderingUrl,
+  resolveGuestTableToken,
   sortQueueFIFO,
 } from '../src/lib/order-utils.js';
 import { documentItem, formatPHP } from '../src/lib/document-utils.js';
+import QRCode from 'qrcode';
 
 class MemoryStorage {
   values = new Map();
@@ -30,6 +34,29 @@ class MemoryStorage {
     this.values.set(key, String(value));
   }
 }
+
+test('table names avoid duplicate prefixes and QR URLs preserve the configured menu route', () => {
+  assert.equal(formatTableLabel('3'), 'Table 3');
+  assert.equal(formatTableLabel('Table 3'), 'Table 3');
+  assert.equal(formatTableLabel('table 3'), 'Table 3');
+  assert.equal(formatTableLabel('Patio'), 'Table Patio');
+  assert.equal(buildTableOrderingUrl('https://menu.example', '/order/menu', 'table-token-1'), 'https://menu.example/order/menu?table=table-token-1');
+  assert.equal(buildTableOrderingUrl('https://menu.example', '/order/menu', 'table-token-2'), 'https://menu.example/order/menu?table=table-token-2');
+  const oldCheckout = { payload: { p_table_token: 'table-token-1' } };
+  assert.equal(resolveGuestTableToken('?table=table-token-1', oldCheckout), 'table-token-1');
+  assert.equal(resolveGuestTableToken('?table=table-token-2', oldCheckout), 'table-token-2', 'a newly opened table link wins over saved checkout context');
+  assert.equal(resolveGuestTableToken('', oldCheckout), 'table-token-1', 'saved QR context survives refresh when the route omits its query');
+});
+
+test('local QR generation produces distinct table images for two table links', async () => {
+  const links = [
+    buildTableOrderingUrl('https://menu.example', '/', 'public-token-table-1'),
+    buildTableOrderingUrl('https://menu.example', '/', 'public-token-table-2'),
+  ];
+  const images = await Promise.all(links.map((link) => QRCode.toDataURL(link, { width: 160 })));
+  assert.ok(images.every((image) => image.startsWith('data:image/png;base64,')));
+  assert.notEqual(images[0], images[1]);
+});
 
 test('normalizes an RPC function wrapper and aliases its ticket fields', () => {
   const order = normalizeGuestOrder([{
@@ -145,6 +172,18 @@ test('guest requests preserve customization choices, order type, and QR table th
   assert.equal(request.payload.p_table_token, 'table-token');
   const retry = prepareGuestOrderRequest({ storage, cart: [], pickupName: '', createToken: () => assert.fail('Retry must reuse the saved token.') });
   assert.deepEqual(retry.payload, request.payload);
+});
+
+test('takeaway guest requests omit the public table token', () => {
+  const request = prepareGuestOrderRequest({
+    storage: new MemoryStorage(),
+    cart: [{ ItemID: 8, quantity: 1 }],
+    pickupName: '',
+    serviceType: 'takeaway',
+    createToken: () => 'secure-guest-token',
+  });
+  assert.equal(request.payload.p_service_type, 'takeaway');
+  assert.equal(Object.hasOwn(request.payload, 'p_table_token'), false);
 });
 
 test('reuses a saved retry payload after a browser refresh', () => {

@@ -3,6 +3,22 @@ export const GUEST_CHECKOUT_KEY = 'esmiringkape.guest-checkout';
 export const getRpcValue = (record, ...keys) =>
   keys.map((key) => record?.[key]).find((value) => value !== undefined && value !== null);
 
+export const formatTableLabel = (value) => {
+  const name = String(value ?? '').trim();
+  if (!name) return 'Table —';
+  const tableName = name.replace(/^table(?:\s+|$)/i, '').trim();
+  return tableName ? `Table ${tableName}` : 'Table';
+};
+
+export const buildTableOrderingUrl = (siteUrl, menuPath, publicToken) => {
+  const url = new URL(menuPath || '/', siteUrl.endsWith('/') ? siteUrl : `${siteUrl}/`);
+  url.searchParams.set('table', publicToken);
+  return url.toString();
+};
+
+export const resolveGuestTableToken = (search, savedCheckout = null) =>
+  new URLSearchParams(search).get('table') || savedCheckout?.payload?.p_table_token || '';
+
 const getSingleRpcResult = (data) => {
   if (data == null) return null;
   if (typeof data === 'string') {

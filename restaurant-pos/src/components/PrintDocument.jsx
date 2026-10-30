@@ -1,4 +1,5 @@
 import { documentDate, documentItem, formatPHP } from '../lib/document-utils.js';
+import { formatTableLabel } from '../lib/order-utils.js';
 
 export default function PrintDocument({ order, kind = 'ticket' }) {
   if (!order) return null;
@@ -17,7 +18,7 @@ export default function PrintDocument({ order, kind = 'ticket' }) {
       <h2>{kind === 'receipt' ? 'Receipt' : 'Order Ticket'}</h2>
       <p><span>Ticket</span><strong>#{order.orderNumber ?? order.ticketNumber ?? order.orderId}</strong></p>
       <p><span>Date</span><strong>{documentDate(order.createdAt)}</strong></p>
-      {order.serviceType && <p><span>Order type</span><strong>{order.serviceType === 'dine_in' ? `Dine-in · Table ${order.tableNumber || ''}` : 'Takeaway'}</strong></p>}
+      {order.serviceType && <p><span>Order type</span><strong>{order.serviceType === 'dine_in' ? `Dine-in · ${formatTableLabel(order.tableNumber)}` : 'Takeaway'}</strong></p>}
       {order.guestName && <p><span>Pickup</span><strong>{order.guestName}</strong></p>}
       {kind === 'receipt' && order.cashier && <p><span>Cashier</span><strong>{order.cashier}</strong></p>}
       <div className="print-document-lines">

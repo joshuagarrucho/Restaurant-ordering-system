@@ -13,7 +13,7 @@ Only the Supabase project URL and publishable anon key belong in the Vite fronte
 
 ## Database migrations — manual execution required
 
-This repository now contains six ordered SQL migrations. **This workflow did not apply migration 006, and its live migration state was not verified.** On a fresh database, review the scripts on a backup or staging project first, then run each complete file in Supabase SQL Editor in this order. On an existing database, verify that migrations 001–005 have already committed and run only migration 006; do not rerun an applied migration. If migration state is unclear, reconcile the existing objects and data on staging before proceeding:
+This repository now contains seven ordered SQL migrations. **This workflow did not apply migrations 006 or 007, and the live migration state was not verified.** On a fresh database, review the scripts on a backup or staging project first, then run each complete file in Supabase SQL Editor in this order. On an existing database, inspect its migration history and run only migrations that have not already committed; do not rerun an applied migration. If migration state is unclear, reconcile the existing objects and data on staging before proceeding:
 
 1. `supabase/migrations/001_staff_access.sql` — Employee/Auth mapping, staff helpers, RLS, and admin-only staff operations.
 2. `supabase/migrations/002_sales_snapshots_and_settings.sql` — product image URL, ticket/order snapshots, configurable totals, and receipt settings.
@@ -21,6 +21,7 @@ This repository now contains six ordered SQL migrations. **This workflow did not
 4. `supabase/migrations/004_staff_orders_payments_queue.sql` — idempotent POS sale, cash confirmation, ticket list, FIFO claim/status RPCs, and staff reads.
 5. `supabase/migrations/005_admin_reports_and_controls.sql` — admin reports, inventory/staff/settings operations, and audited cancellation/refund RPC.
 6. `supabase/migrations/006_customization_dining_tables_qr.sql` — coffee customization and price snapshots, option-specific ingredient recipes, dining tables, table QR links, private guest tracking, and configured order RPCs.
+7. `supabase/migrations/007_text_table_tokens.sql` — aligns public menu validation and guest checkout on text table tokens while preserving the UUID values stored on tables.
 
 The migrations preserve the quoted base tables (`"Employee"`, `"Categories"`, `"MenuItems"`, `"Order"`, `"OrderItem"`, `"Payment"`, and `"OrderStatusHistory"`) and `customers`. Existing guest functions remain available for legacy tickets. The new UI uses `esmiringkape_create_guest_order_v2` and `esmiringkape_track_guest_order_v2` so customization, table assignment, idempotency, and private per-order tracking can be enforced. A read-only live probe confirmed public category/menu endpoints and denied anonymous access to employee, customer, order, order item, payment, and order-status-history tables. That probe did not inspect protected columns or apply any migration. No order was created during verification.
 
@@ -49,7 +50,7 @@ There is no public staff registration and no default password.
 
 ## Optional development seed
 
-After migrations 001–006, you may run `supabase/seed/dev_seed.sql` on a development database only. In the same SQL session, first run `SET app.esmiringkape_seed_environment = 'development';`, then execute the seed file. It fails unless that explicit session flag is present. It creates a disabled `[DEMO]` menu item and `[DEMO]` inventory, and records sample opening stock separately from real business records. Do not set the flag or run this seed in production.
+After migrations 001–007, you may run `supabase/seed/dev_seed.sql` on a development database only. In the same SQL session, first run `SET app.esmiringkape_seed_environment = 'development';`, then execute the seed file. It fails unless that explicit session flag is present. It creates a disabled `[DEMO]` menu item and `[DEMO]` inventory, and records sample opening stock separately from real business records. Do not set the flag or run this seed in production.
 
 ## Coffee options and inventory before opening
 
@@ -63,18 +64,18 @@ The Inventory screen shows reorder thresholds, low-stock labels, and the last 30
 
 ## Dining tables and QR ordering
 
-Add and manage tables in **Admin → Dining tables & QR**. Renaming a table preserves its public QR token; deactivating it makes its link reject new orders. Production builds must set `VITE_PUBLIC_SITE_URL` to the public HTTPS site origin before downloading or printing QR codes. The QR encodes only the public menu link and does not grant access to any order.
+Add and manage tables in **Admin → Dining tables & QR**. Renaming a table preserves its public QR token; deactivating it makes its link reject new orders. Production builds must set `VITE_PUBLIC_SITE_URL` to the public HTTPS site origin and `VITE_PUBLIC_MENU_PATH` to the customer menu route (currently `/`). Each QR contains the table's public token and opens the menu with that table selected. QR images are generated locally in the browser; individual PNGs, copied links, and printable sheets do not use a third-party QR service. Per-order tracking tokens remain separate and private.
 
 To test one complete QR order from a phone during development:
 
 1. Connect the computer and phone to the same Wi-Fi network. Find the computer's LAN IPv4 address with `ipconfig`.
 2. In `restaurant-pos/.env`, set `VITE_PUBLIC_SITE_URL=http://<COMPUTER-LAN-IP>:5173` for development only, then restart Vite with `npm run dev -- --host 0.0.0.0`.
 3. On staging, configure at least one drink's options and ingredient recipes in **Menu & categories** and **Inventory**. Turn on inventory enforcement only after the recipes and opening quantities are correct.
-4. Sign in as admin, open **Dining tables & QR**, add an active table, and download its QR or print the active table sheet.
-5. Scan the QR with the phone camera. Confirm the mobile menu shows that table, customize a drink, and verify the updated price before adding it to **Your Order**. Submit the order and confirm its dine-in table in the customer confirmation and cashier order list.
+4. Sign in as admin, open **Dining tables & QR**, add an active table, and copy its link, download its PNG, or print the active table sheet.
+5. Scan the QR with the phone camera. Confirm the mobile menu shows “Dining at Table …”, customize a drink, and verify the updated price before adding it to **Your Order**. Submit the order and confirm its dine-in table in the customer confirmation and cashier order list.
 6. Confirm payment in the cashier order list. Verify the ticket enters the FIFO preparation queue only after payment, then check the table and customization on the preparation ticket/receipt. Track the order from the same phone session. Scan the same table QR in a fresh session to confirm it opens a new menu without exposing the first order.
 
-The LAN address is for development and must not be used in production. Set `VITE_PUBLIC_SITE_URL=https://<your-public-domain>` in the deployment environment before building. QR images currently use a public QR image service; it receives only the public menu link being encoded.
+The LAN address is for development and must not be used in production. Set `VITE_PUBLIC_SITE_URL=https://<your-public-domain>` and `VITE_PUBLIC_MENU_PATH=/` (or your deployed menu route) in the deployment environment before building.
 
 ## Realtime and fallback
 

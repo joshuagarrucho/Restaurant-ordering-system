@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronRight, Clock3, Printer, RefreshCw, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase.js';
-import { calculateCashPayment, sortQueueFIFO } from '../lib/order-utils.js';
+import { calculateCashPayment, sortQueueFIFO, formatTableLabel } from '../lib/order-utils.js';
 import { dateKeyPH, documentDate, documentItem, formatPHP } from '../lib/document-utils.js';
 import PrintDocument from './PrintDocument.jsx';
 
@@ -165,7 +165,7 @@ function StaffOrderCard({ order, highlight, expanded, onToggle, onPay, onStatus,
         <button className="staff-order-open" onClick={onToggle} aria-expanded={expanded}>
           <span className="staff-ticket">Ticket #{order.orderNumber ?? order.ticketNumber ?? orderId}</span>
           {highlight && <span className="staff-next-label">Next</span>}
-          <span className="staff-order-meta"><Clock3 size={13} /> {documentDate(order.createdAt)} · {order.orderType === 'counter' ? 'Counter' : 'Guest'} {order.serviceType ? `· ${order.serviceType === 'dine_in' ? `Dine-in · Table ${order.tableNumber || ''}` : 'Takeaway'}` : ''} {order.guestName ? `· ${order.guestName}` : ''}</span>
+          <span className="staff-order-meta"><Clock3 size={13} /> {documentDate(order.createdAt)} · {order.orderType === 'counter' ? 'Counter' : 'Guest'} {order.serviceType ? `· ${order.serviceType === 'dine_in' ? `Dine-in · ${formatTableLabel(order.tableNumber)}` : 'Takeaway'}` : ''} {order.guestName ? `· ${order.guestName}` : ''}</span>
           <span className="staff-order-meta">{lines.map((item) => `${item.name} × ${item.quantity}`).join(', ') || 'No item details'}</span>
         </button>
         <div className="staff-order-statuses"><span className={`staff-status-pill ${paid ? 'status-paid' : 'status-unpaid'}`}>{paid ? 'Paid' : 'Awaiting Payment'}</span><span className="staff-status-pill">{status}</span></div>
@@ -174,7 +174,7 @@ function StaffOrderCard({ order, highlight, expanded, onToggle, onPay, onStatus,
       {expanded && (
         <div className="staff-order-details">
           <div className="staff-order-detail-lines">{lines.map((item, index) => <div key={`${item.name}-${index}`}><span>{item.name} × {item.quantity}{item.options.length > 0 && <small className="staff-line-options">{item.options.join(' · ')}</small>}</span><strong>{formatPHP(item.lineTotal)}</strong></div>)}</div>
-          <div className="staff-order-detail-meta"><span>Order: {order.serviceType ? order.serviceType === 'dine_in' ? `Dine-in · Table ${order.tableNumber || '—'}` : 'Takeaway' : 'Legacy order'}</span><span>Pickup: {order.guestName || '—'}</span><span>Cashier: {order.cashier || '—'}</span><span>Order time: {documentDate(order.createdAt)}</span><span>Payment: {order.paymentMethod || order.paymentStatus}</span></div>
+          <div className="staff-order-detail-meta"><span>Order: {order.serviceType ? order.serviceType === 'dine_in' ? `Dine-in · ${formatTableLabel(order.tableNumber)}` : 'Takeaway' : 'Legacy order'}</span><span>Pickup: {order.guestName || '—'}</span><span>Cashier: {order.cashier || '—'}</span><span>Order time: {documentDate(order.createdAt)}</span><span>Payment: {order.paymentMethod || order.paymentStatus}</span></div>
           {!paid && canReceivePayment && status !== 'Cancelled' && (
             <div className="staff-order-pay"><label>Cash received <input type="number" min={order.amountDue ?? order.total} step="0.01" value={cash} onChange={(event) => setCash(event.target.value)} /></label><span>Change: {formatPHP(Math.max(0, Number(cash || 0) - Number(order.amountDue ?? order.total)))}</span><button className="button button-primary compact-action" disabled={busy} onClick={() => onPay(order, cash)}>{busy ? 'Saving…' : 'Receive Payment'}</button></div>
           )}

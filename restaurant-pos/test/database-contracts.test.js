@@ -10,6 +10,7 @@ const operations = migration('004_staff_orders_payments_queue.sql');
 const totals = migration('002_sales_snapshots_and_settings.sql');
 const admin = migration('005_admin_reports_and_controls.sql');
 const enhancements = migration('006_customization_dining_tables_qr.sql');
+const tableTokens = migration('007_text_table_tokens.sql');
 
 test('database payment RPC returns an existing paid order before stock can be deducted again', () => {
   const paidCheck = operations.indexOf("if v_paid then");
@@ -154,6 +155,19 @@ test('new service type and table fields leave historic orders unassigned and sur
   assert.match(enhancements, /'service_type', o\."ServiceType"/);
   assert.match(enhancements, /'table_number', t\."TableNumber"/);
   assert.match(enhancements, /'selected_options', coalesce\(oi\."OptionsSnapshot"->'selected_options'/);
+});
+
+test('public menu and guest checkout use the same text token contract and revalidate active tables', () => {
+  assert.match(tableTokens, /drop function if exists public\.esmiringkape_public_menu\(uuid\)/i);
+  assert.match(tableTokens, /create or replace function public\.esmiringkape_public_menu\(p_table_token text default null\)/i);
+  assert.match(tableTokens, /invalid_text_representation[\s\S]*?This table QR link is invalid or inactive/);
+  assert.match(tableTokens, /drop function if exists public\.esmiringkape_create_guest_order_v2\(jsonb, text, text, text, uuid\)/i);
+  assert.match(tableTokens, /p_service_type text default 'takeaway', p_table_token text default null/);
+  assert.match(tableTokens, /where "PublicToken" = v_table_token and "IsActive"/);
+  assert.match(tableTokens, /insert into public\."Order"[\s\S]*?"ServiceType", "DiningTableID"/);
+  assert.match(tableTokens, /Takeaway orders cannot be assigned to a table/);
+  assert.match(tableTokens, /grant execute on function public\.esmiringkape_public_menu\(text\) to anon, authenticated/i);
+  assert.match(tableTokens, /grant execute on function public\.esmiringkape_create_guest_order_v2\(jsonb, text, text, text, text\) to anon/i);
 });
 
 test('80 mm print CSS selects one ticket or receipt and hides the application UI', () => {
